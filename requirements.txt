@@ -1,6 +1,9 @@
 streamlit
 google-generativeai
 anthropic
-pyyaml
+duckdb
+sqlglot
 pandas
+pyyaml
 openpyxl
+tabulate
