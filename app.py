@@ -2,12 +2,14 @@ import os
 import json
 import yaml
 import re
+import pandas as pd
 import streamlit as st
 import google.generativeai as genai
 
 st.set_page_config(page_title="OKF MVP", layout="wide")
 
-def parse_input(text: str) -> dict:
+def parse_text_input(text: str) -> dict:
+    """Parses pasted DDL or basic CSV text."""
     tables = {}
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     if not lines: return tables
@@ -28,6 +30,29 @@ def parse_input(text: str) -> dict:
                 parts = col.strip().split()
                 if len(parts) >= 2:
                     tables[t].append({"name": parts[0], "type": parts[1]})
+    return tables
+
+def parse_uploaded_file(uploaded_file) -> dict:
+    """Reads a file, extracts schema, and DROPS row data."""
+    tables = {}
+    file_name = uploaded_file.name.split('.')[0]
+    
+    # We only read the first 5 rows just to let pandas guess the data types
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file, nrows=5)
+    else:
+        df = pd.read_excel(uploaded_file, nrows=5)
+        
+    tables[file_name] = []
+    for col, dtype in df.dtypes.items():
+        typ = "varchar"
+        if pd.api.types.is_numeric_dtype(dtype):
+            typ = "numeric" if pd.api.types.is_float_dtype(dtype) else "integer"
+        elif pd.api.types.is_datetime64_any_dtype(dtype):
+            typ = "timestamp"
+        
+        tables[file_name].append({"name": col, "type": typ})
+        
     return tables
 
 def generate_okf(schema_dict: dict) -> str:
@@ -57,13 +82,23 @@ def generate_okf(schema_dict: dict) -> str:
     return model.generate_content(prompt).text
 
 st.title("OKF MVP — Phase 2")
-st.markdown("Paste your DDL or CSV (`table,column,type`). **Max 30 tables.**")
+st.markdown("Upload a raw data file or paste a schema. **Row data is immediately stripped and discarded; only column headers are sent to the AI.**")
 
-schema_input = st.text_area("Schema Input", height=200)
+uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+st.markdown("---")
+schema_input = st.text_area("Or Paste DDL / CSV (`table,column,type`)", height=150)
 
-if st.button("Generate OKF") and schema_input:
-    parsed_dict = parse_input(schema_input)
+if st.button("Generate OKF"):
+    parsed_dict = {}
     
+    if uploaded_file is not None:
+        parsed_dict = parse_uploaded_file(uploaded_file)
+    elif schema_input:
+        parsed_dict = parse_text_input(schema_input)
+    else:
+        st.error("Please upload a file or paste a schema.")
+        st.stop()
+        
     if len(parsed_dict) > 30:
         st.error("Too many tables! Please limit to 30.")
     elif not parsed_dict:
@@ -74,19 +109,16 @@ if st.button("Generate OKF") and schema_input:
                 raw_json = generate_okf(parsed_dict)
                 okf_dict = json.loads(raw_json)
                 
-                # The Validator: Bouncer checks for required fields
                 if "tables" not in okf_dict:
                     raise ValueError("Missing 'tables' array in output.")
                 
                 for table in okf_dict["tables"]:
-                    required_table_keys = ["grain", "status", "provenance"]
-                    for key in required_table_keys:
+                    for key in ["grain", "status", "provenance"]:
                         if key not in table:
                             raise ValueError(f"Table '{table.get('name', 'Unknown')}' is missing required key: {key}")
                     
                     for col in table.get("columns", []):
-                        required_col_keys = ["status", "provenance", "pii"]
-                        for key in required_col_keys:
+                        for key in ["status", "provenance", "pii"]:
                             if key not in col:
                                 raise ValueError(f"Column '{col.get('name', 'Unknown')}' is missing required key: {key}")
 
