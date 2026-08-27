@@ -2,3 +2,5 @@ streamlit
 google-generativeai
 anthropic
 pyyaml
+pandas
+openpyxl
