@@ -116,9 +116,11 @@ def okf_context(okf: dict) -> str:
         lines.append(f'  grain: {t["grain"]}')
         for c in t["columns"]:
             lines.append(f'  - "{c["name"]}" ({c["type"]}, {c["semantic_role"]}) — {c["description"]}')
-    if okf.get("relationships"):
+    joins = [r for r in okf.get("relationships", [])
+             if r.get("status") in ("approved", "edited")]
+    if joins:
         lines.append("APPROVED JOINS (use only these):")
-        for r in okf["relationships"]:
+        for r in joins:
             lines.append(f'  {r["from"]} = {r["to"]}  ({r["cardinality"]})')
     else:
         lines.append("APPROVED JOINS: none. Do not join tables.")
