@@ -9,6 +9,7 @@ import parsers
 import validator
 import mockdata
 import safety
+import suggest
 import llm
 import okf_spec as S
 
@@ -101,6 +102,11 @@ def run_all():
     ck(g, "A clean draft passes the spec check", validator.validate_okf(okf) == [],
        validator.validate_okf(okf)[:2])
     rev = [c for c in okf["tables"][0]["columns"] if c["name"] == "total_revenue"][0]
+    ck(g, "An unreviewed KPI above 0.40 is rejected by the spec check",
+       any("unreviewed KPI" in x for x in validator.validate_okf(
+           {**okf, "tables": [{**okf["tables"][0], "columns": [
+               {**c, "confidence": 0.9} if c["name"] == "total_revenue" else c
+               for c in okf["tables"][0]["columns"]]}] + okf["tables"][1:]})))
     ck(g, "Revenue is forced to low confidence until a human confirms it",
        rev["confidence"] <= 0.40, rev["confidence"])
     ck(g, "Revenue description says the definition is a policy choice",
@@ -233,7 +239,46 @@ def run_all():
     c = llm.okf_context(okf)
     ck(g, "Question prompt includes certified metrics", "net_revenue" in c)
     ck(g, "Question prompt includes approved joins", "APPROVED JOINS" in c)
+    for rel in okf["relationships"]:
+        rel["status"] = "draft"
+    ck(g, "An unapproved join is never offered to the model",
+       "Do not join tables" in llm.okf_context(okf))
+    for rel in okf["relationships"]:
+        rel["status"] = "approved"
     ck(g, "Question prompt defines the refusal answer",
        llm.NO_ANSWER in llm.build_sql_prompt(okf, "headcount?"))
+
+    # --- suggestions -------------------------------------------------------
+    g = "Suggesting questions"
+    okf["relationships"][0]["status"] = "approved"
+    ideas = suggest.initial_suggestions(okf, con)
+    ck(g, "Suggestions are produced without calling a model", len(ideas) >= 2, ideas)
+    ck(g, "A suggestion names a real measure",
+       any("revenue" in i.lower() for i in ideas), ideas)
+    ck(g, "A suggestion crosses the approved join",
+       any("country" in i.lower() for i in ideas), ideas)
+    ck(g, "No double wording like 'Total total revenue'",
+       not any("total total" in i.lower() for i in ideas), ideas)
+    every = " ".join(ideas).lower()
+    ck(g, "Suggestions never mention a column outside the OKF",
+       "salary" not in every and "payroll" not in every)
+    nxt = suggest.followups(
+        okf, 'SELECT "region", SUM("total_revenue") r FROM "t_08_e_commerce_orders" '
+             'GROUP BY "region"', con)
+    ck(g, "Follow-ups avoid repeating the dimension just used",
+       all("by region" not in i.lower() for i in nxt), nxt)
+    ck(g, "Follow-ups are produced", len(nxt) >= 1, nxt)
+
+    # --- audit trail -------------------------------------------------------
+    g = "Audit trail"
+    col = okf["tables"][0]["columns"][0]
+    col.setdefault("ai_confidence", col["confidence"])
+    col["status"] = "edited"
+    col["provenance"] = "human_edited"
+    col["confidence"] = 1.0
+    ck(g, "A human sign-off keeps what the model originally scored",
+       "ai_confidence" in col and col["ai_confidence"] < 1.0, col.get("ai_confidence"))
+    ck(g, "An OKF carrying an audit trail still passes the spec check",
+       validator.validate_okf(okf) == [], validator.validate_okf(okf)[:2])
 
     return r
