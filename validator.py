@@ -142,6 +142,8 @@ def validate_okf(okf: dict) -> list:
             e.append(f"Table '{tn}' provenance '{t.get('provenance')}' invalid")
         if not isinstance(t.get("confidence"), (int, float)) or not 0 <= t["confidence"] <= 1:
             e.append(f"Table '{tn}' confidence out of range: {t.get('confidence')}")
+        if "ai_confidence" in t and not 0 <= t["ai_confidence"] <= 1:
+            e.append(f"Table '{tn}' ai_confidence out of range")
         if not t.get("columns"):
             e.append(f"Table '{tn}' has no columns.")
 
@@ -162,11 +164,14 @@ def validate_okf(okf: dict) -> list:
                 e.append(f"Column '{tn}.{cn}' pii must be true/false")
             if not isinstance(c.get("confidence"), (int, float)) or not 0 <= c["confidence"] <= 1:
                 e.append(f"Column '{tn}.{cn}' confidence out of range")
-            # KPI cap applies to AI drafts only. A human signing off overrides it.
-            if (c.get("provenance") == "ai_draft"
+            if "ai_confidence" in c and not 0 <= c["ai_confidence"] <= 1:
+                e.append(f"Column '{tn}.{cn}' ai_confidence out of range")
+            # KPI cap applies while the definition is still an unreviewed draft.
+            # Approving or editing it is the human sign-off that lifts the cap.
+            if (c.get("status") == "draft"
                     and is_kpi(cn, c.get("description", ""))
                     and c.get("confidence", 1) > 0.40):
-                e.append(f"Column '{tn}.{cn}' is an AI-drafted KPI but confidence > 0.40")
+                e.append(f"Column '{tn}.{cn}' is an unreviewed KPI but confidence > 0.40")
 
     index = {t["name"]: {c["name"] for c in t.get("columns", [])} for t in okf.get("tables", [])}
     for r in okf.get("relationships", []):
@@ -204,7 +209,7 @@ def approval_stats(okf: dict) -> dict:
             tot += 1
             if obj.get("status") in ("approved", "edited"):
                 app += 1
-            if obj.get("confidence", 0) < S.REVIEW_THRESHOLD:
+            if obj.get("status") == "draft" and obj.get("confidence", 0) < S.REVIEW_THRESHOLD:
                 low += 1
     return {"total": tot, "approved": app, "low_confidence": low,
             "pct": round(100 * app / tot) if tot else 0}
